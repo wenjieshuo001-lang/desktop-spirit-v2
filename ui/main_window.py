@@ -1,6 +1,7 @@
 """V2 主控制台 —— 搜索、筛选、导出导入、统计看板。"""
 
 import json
+import os
 import logging
 from datetime import datetime, date
 
@@ -17,6 +18,7 @@ from PyQt5.QtGui import QColor
 from core import database as db
 from core.analyzer import Analyzer
 from core.executor import get_executor
+from core import codex_integration as cx
 from ui.widgets import StatusBanner, StatCard
 from ui.habit_detail import HabitDialog
 
@@ -80,10 +82,16 @@ class MainWindow(QMainWindow):
         an_btn.clicked.connect(self._analyze_now)
         tbb.addWidget(an_btn)
 
-        QPushButton("🔄 刷新", clicked=self.refresh).setParent(self)
         rf_btn = QPushButton("🔄 刷新")
         rf_btn.clicked.connect(self.refresh)
         tbb.addWidget(rf_btn)
+
+        tbb.addWidget(QLabel("|"))
+
+        cx_btn = QPushButton("🤖 Codex")
+        cx_btn.setToolTip("向 Codex 同步精灵状态（进化/报错/升级）")
+        cx_btn.clicked.connect(self._sync_codex)
+        tbb.addWidget(cx_btn)
 
         tbb.addStretch()
 
@@ -337,6 +345,42 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.error(f"分析异常: {e}", exc_info=True)
             self._banner.set_text("❌ 分析失败")
+        finally:
+            QTimer.singleShot(3000, lambda: self._banner.set_text("🧠 桌面精灵 V2 · 习惯学习中心"))
+
+    def _sync_codex(self):
+        """向 Codex 同步精灵状态。"""
+        self._banner.set_text("🤖 正在同步 Codex...")
+        QApplication.processEvents()
+        try:
+            habits = db.get_habits(active_only=True)
+            stats = db.get_exec_stats(0)
+            error_count = len([f for f in (os.listdir(cx.ERRORS_DIR) if os.path.exists(cx.ERRORS_DIR) else [])
+                              if f.endswith('.md') and f != '_latest.md'])
+
+            response = cx.sync_with_codex(
+                habit_count=len(habits),
+                analysis_ran=True,
+                execution_count=stats.get("total", 0),
+                error_count=error_count,
+            )
+
+            if response and response["commands"]:
+                self._banner.set_text(f"✅ Codex 已响应: {len(response['commands'])} 条指令")
+                self.statusBar().showMessage(f"Codex 指令已执行: {[c.get('action','') for c in response['commands']]}")
+            else:
+                self._banner.set_text("✅ Codex 同步完成（无新指令）")
+                self.statusBar().showMessage("精灵状态已同步到 Codex")
+
+            if self._spirit:
+                if response and response["commands"]:
+                    self._spirit.set_mood("happy", "Codex 有回复！✨")
+                else:
+                    self._spirit.set_mood("happy", "已同步到 Codex 📮")
+        except Exception as e:
+            logger.error(f"Codex 同步失败: {e}")
+            self._banner.set_text("❌ Codex 同步失败")
+            self.statusBar().showMessage(f"❌ {e}")
         finally:
             QTimer.singleShot(3000, lambda: self._banner.set_text("🧠 桌面精灵 V2 · 习惯学习中心"))
 

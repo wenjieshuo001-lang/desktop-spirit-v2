@@ -16,6 +16,7 @@ from core.database import init_db, clean_old_data
 from core.monitor import ActivityMonitor
 from core.recorder import Recorder
 from core.analyzer import Analyzer
+from core import codex_integration as cx
 from ui.main_window import MainWindow
 from ui.spirit_avatar import SpiritAvatar
 
@@ -33,6 +34,16 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger("main")
+
+
+# 全局异常钩子 —— 未捕获异常自动报告给 Codex
+_original_excepthook = sys.excepthook
+
+def _codex_excepthook(exctype, value, tb):
+    cx.report_error("系统", value, {"type": str(exctype.__name__)})
+    _original_excepthook(exctype, value, tb)
+
+sys.excepthook = _codex_excepthook
 
 
 def main():

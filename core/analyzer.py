@@ -12,6 +12,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 
 from . import database as db
+from . import codex_integration as cx
 from config import settings
 
 logger = logging.getLogger(__name__)
@@ -43,6 +44,14 @@ class Analyzer:
             self._scan_click_patterns()
             self._scan_active_hours()
             db.update_daily_stats()
+
+            # 同步到 Codex
+            try:
+                habits = db.get_habits(active_only=True)
+                cx.sync_with_codex(habit_count=len(habits), analysis_ran=True)
+            except Exception as cx_e:
+                logger.warning(f"Codex 同步失败: {cx_e}")
+
             logger.info("✅ 分析完成")
         except Exception as e:
             logger.error(f"分析异常: {e}", exc_info=True)

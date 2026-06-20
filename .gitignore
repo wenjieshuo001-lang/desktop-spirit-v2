@@ -16,3 +16,11 @@ storage/spirit.log
 # OS
 Thumbs.db
 .DS_Store
+
+# Codex runtime data
+storage/codex/errors/
+storage/codex/reports/
+storage/codex/evolution.json
+storage/codex/codex_response.md
+storage/codex/upgrade_request.md
+resources/*.ico
