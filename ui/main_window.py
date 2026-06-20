@@ -365,19 +365,83 @@ class MainWindow(QMainWindow):
                 error_count=error_count,
             )
 
-            if response and response["commands"]:
-                self._banner.set_text(f"✅ Codex 已响应: {len(response['commands'])} 条指令")
-                self.statusBar().showMessage(f"Codex 指令已执行: {[c.get('action','') for c in response['commands']]}")
+            # 检查是否有待用户确认的危险指令
+            pending_file = os.path.join(cx.CODEX_DIR, "pending_commands.json")
+            pending_cmds = []
+            if os.path.exists(pending_file):
+                try:
+                    with open(pending_file, "r", encoding="utf-8") as f:
+                        pending_cmds = json.load(f)
+                except (json.JSONDecodeError, OSError):
+                    pass
+
+            if pending_cmds:
+                self._show_pending_commands(pending_cmds, pending_file)
+            elif response and response["commands"]:
+                self._banner.set_text(f"✅ Codex: {len(response['commands'])} 条指令已执行")
+                self.statusBar().showMessage(f"已执行: {[c.get('action','') for c in response['commands']]}")
             else:
                 self._banner.set_text("✅ Codex 同步完成（无新指令）")
                 self.statusBar().showMessage("精灵状态已同步到 Codex")
 
             if self._spirit:
-                if response and response["commands"]:
+                if pending_cmds:
+                    self._spirit.set_mood("learned", f"{len(pending_cmds)} 条 Codex 指令待确认")
+                elif response and response["commands"]:
                     self._spirit.set_mood("happy", "Codex 有回复！✨")
                 else:
                     self._spirit.set_mood("happy", "已同步到 Codex 📮")
         except Exception as e:
+            logger.error(f"Codex 同步失败: {e}")
+            self._banner.set_text("❌ Codex 同步失败")
+            self.statusBar().showMessage(f"❌ {e}")
+        finally:
+            QTimer.singleShot(3000, lambda: self._banner.set_text("🧠 桌面精灵 V2 · 习惯学习中心"))
+
+    def _show_pending_commands(self, commands: list, pending_file: str):
+        """显示待用户确认的 Codex 指令。"""
+        from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTextEdit
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("🤖 Codex 指令待确认")
+        dlg.setMinimumSize(500, 350)
+        layout = QVBoxLayout(dlg)
+
+        layout.addWidget(QLabel(f"📨 Codex 发来了 {len(commands)} 条修改性指令，请审核："))
+
+        info = QTextEdit()
+        info.setReadOnly(True)
+        lines = []
+        for i, cmd in enumerate(commands):
+            lines.append(f"--- 指令 {i+1} ---")
+            lines.append(f"  操作: {cmd.get('action', '?')}")
+            lines.append(f"  参数: {json.dumps(cmd.get('params', {}), indent=4, ensure_ascii=False)}")
+            lines.append("")
+        info.setText("\n".join(lines))
+        layout.addWidget(info)
+
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+
+        reject_btn = QPushButton("❌ 全部拒绝")
+        reject_btn.clicked.connect(lambda: (os.remove(pending_file), dlg.accept()))
+        btn_layout.addWidget(reject_btn)
+
+        approve_btn = QPushButton("✅ 全部执行")
+        approve_btn.setStyleSheet("background:#4CAF50;color:white;padding:6px 16px;border-radius:4px;")
+        approve_btn.clicked.connect(lambda: self._approve_commands(commands, pending_file, dlg))
+        btn_layout.addWidget(approve_btn)
+
+        layout.addLayout(btn_layout)
+        dlg.exec_()
+
+    def _approve_commands(self, commands: list, pending_file: str, dlg):
+        """用户确认后执行 Codex 指令。"""
+        for cmd in commands:
+            cx._execute_codex_command(cmd)
+        os.remove(pending_file)
+        self._banner.set_text(f"✅ {len(commands)} 条 Codex 指令已执行")
+        dlg.accept()
             logger.error(f"Codex 同步失败: {e}")
             self._banner.set_text("❌ Codex 同步失败")
             self.statusBar().showMessage(f"❌ {e}")

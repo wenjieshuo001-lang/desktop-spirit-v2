@@ -353,9 +353,29 @@ def read_codex_response() -> Optional[dict]:
 # 6. 整合入口 —— 精灵定期调用
 # ═══════════════════════════════════════════════
 
+# ── 可安全自动执行的指令（只读） ───────────────
+_SAFE_ACTIONS = {"log", "request_data"}
+
+# ── 配置白名单 —— set_config 只能修改这些键 ────
+_CONFIG_WHITELIST = {
+    "spirit.skin",
+    "spirit.opacity",
+    "spirit.size",
+    "spirit.auto_hide",
+    "spirit.always_on_top",
+    "analyzer.min_occurrences",
+    "analyzer.lookback_days",
+    "executor.confirm_delay",
+}
+
+
 def sync_with_codex(habit_count: int = 0, analysis_ran: bool = False,
                     execution_count: int = 0, error_count: int = 0):
-    """统一向 Codex 同步精灵的最新状态。"""
+    """统一向 Codex 同步精灵的最新状态。
+
+    ⚠️ 仅自动执行只读指令（log, request_data），
+       修改性指令（apply_patch, set_config）需用户确认。
+    """
     # 更新进化数据
     update_evolution({
         "habit_count": habit_count,
@@ -367,13 +387,44 @@ def sync_with_codex(habit_count: int = 0, analysis_ran: bool = False,
     # 检查 Codex 是否有新指令
     response = read_codex_response()
     if response and response["commands"]:
-        logger.info(f"📩 收到 Codex 指令: {len(response['commands'])} 条")
+        safe_cmds = []
+        dangerous_cmds = []
         for cmd in response["commands"]:
+            if cmd.get("action") in _SAFE_ACTIONS:
+                safe_cmds.append(cmd)
+            else:
+                dangerous_cmds.append(cmd)
+
+        # 自动执行安全指令
+        for cmd in safe_cmds:
             _execute_codex_command(cmd)
+
+        # 危险指令排队等待用户确认
+        if dangerous_cmds:
+            _queue_dangerous_commands(dangerous_cmds)
+            logger.info(f"📨 {len(dangerous_cmds)} 条修改性指令等待用户确认")
     else:
         logger.debug("没有新的 Codex 指令")
 
     return response
+
+
+def _queue_dangerous_commands(commands: list):
+    """将修改性指令写入队列文件，等待用户确认。"""
+    os.makedirs(CODEX_DIR, exist_ok=True)
+    queue_file = os.path.join(CODEX_DIR, "pending_commands.json")
+
+    existing = []
+    if os.path.exists(queue_file):
+        try:
+            with open(queue_file, "r", encoding="utf-8") as f:
+                existing = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            existing = []
+
+    existing.extend(commands)
+    with open(queue_file, "w", encoding="utf-8") as f:
+        json.dump(existing, f, indent=2, ensure_ascii=False)
 
 
 def _execute_codex_command(cmd: dict):
@@ -396,23 +447,34 @@ def _execute_codex_command(cmd: dict):
                                  confidence=params.get("confidence", h["confidence"]))
 
     elif action == "apply_patch":
-        # Codex 提供了代码补丁（自动修复）
+        # Codex 提供了代码补丁
         patch_content = params.get("content", "")
         target_file = params.get("file", "")
         if patch_content and target_file:
             _apply_patch(target_file, patch_content)
 
     elif action == "request_data":
-        # Codex 请求更多数据
+        # Codex 请求更多数据（只读，安全）
         return generate_analytics_report()
 
     elif action == "set_config":
-        # Codex 修改配置
-        from config import settings
-        key = params.get("key")
+        # Codex 修改配置（受白名单限制）
+        key = params.get("key", "")
         value = params.get("value")
-        if key:
-            settings.set(key, value)
+
+        # 校验白名单
+        if key not in _CONFIG_WHITELIST:
+            logger.warning(f"配置键被白名单拒绝: {key}")
+            return
+
+        # 校验值类型
+        if key.endswith(".opacity") and not (0 <= float(value) <= 1):
+            logger.warning(f"配置值不合法: {key}={value}")
+            return
+
+        from config import settings
+        settings.set(key, value)
+        logger.info(f"⚙️ 配置已更新: {key} = {value}")
 
     elif action == "log":
         logger.info(f"[Codex] {params.get('message', '')}")
