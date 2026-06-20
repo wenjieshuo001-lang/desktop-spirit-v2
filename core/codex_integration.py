@@ -422,11 +422,19 @@ def _execute_codex_command(cmd: dict):
 
 
 def _apply_patch(filepath: str, content: str):
-    """应用补丁到源码文件。"""
-    full_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), filepath)
+    """应用补丁到源码文件（安全：校验路径不越界）。"""
+    # 解析并校验路径 —— 防止 Path Traversal
+    project_root = os.path.realpath(os.path.dirname(os.path.dirname(__file__)))
+    full_path = os.path.realpath(os.path.join(project_root, filepath))
+
+    if not full_path.startswith(project_root + os.sep):
+        logger.error(f"路径越界被拒绝: {filepath} → {full_path}")
+        return
+
     if not os.path.exists(full_path):
         logger.error(f"补丁目标不存在: {full_path}")
         return
+
     try:
         # 备份原文件
         backup = full_path + ".bak"
@@ -436,10 +444,10 @@ def _apply_patch(filepath: str, content: str):
         with open(full_path, "r", encoding="utf-8") as f:
             original = f.read()
 
-        # 如果补丁是完整文件内容
+        # 如果补丁被标记为 diff，暂不处理复杂 diff
         if content.startswith("---"):
-            # diff 格式 — 简单处理：直接替换特定行
-            pass  # 简单版本不处理复杂 diff
+            logger.warning("diff 格式补丁暂不支持，跳过")
+            return
         else:
             # 直接替换文件
             with open(full_path, "w", encoding="utf-8") as f:
